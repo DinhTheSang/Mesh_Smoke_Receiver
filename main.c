@@ -135,22 +135,9 @@ MAX_CONNECTIONS, .bluetooth.max_advertisers = MAX_ADVERTISERS, .bluetooth.heap =
 static uint8 num_connections = 0;
 ///Handle of the last opened LE connection
 static uint8 connection_handle = 0xFF;
-///Primary element for temperature
-//static int primary_element_temperature = 0;
-///Secondary element for humidity
-//static int secondary_element_humidity = 1;
 
-//Temperature receive from network
-//static int16 temperature = 0;
-//Humidity send to network
-//static int16 humidity = 0;
-
-//On Off data received from Low Power Sensor Node
-//static uint8 temp_over_threshold = 0;
-
-//TODO
 //define Status Array
-static uint16 transaction_id  = 0;
+static uint16 transaction_id = 0;
 static uint16 primary_element = 0;
 static uint16 secondary_element = 1;
 static uint16 third_element = 2;
@@ -165,10 +152,7 @@ static struct status_arr {
 struct status_arr status_arr[MESH_CFG_MAX_FRIENDSHIPS];
 static uint8 index = 0;
 static uint8 num_lpn = 0;
-/*static uint32 Status_arr[MESH_CFG_MAX_FRIENDSHIPS];
- static uint8 index = 0;
- static uint8 num_lpn = 0;
- */
+
 //User function
 static void button_init();
 static void led_init();
@@ -176,24 +160,6 @@ void set_device_name(bd_addr *pAddr);
 void factory_reset();
 void receive_node_init();
 
-//
-
-/*static void onoff_request(uint16_t model_id,
- uint16_t element_index,
- uint16_t client_addr,
- uint16_t server_addr,
- uint16_t appkey_index,
- const struct mesh_generic_request *request,
- uint32_t transition_ms,
- uint16_t delay_ms,
- uint8_t request_flags);
- */
-/*static void onoff_change(uint16_t model_id,
- uint16_t element_index,
- const struct mesh_generic_state *current,
- const struct mesh_generic_state *target,
- uint32_t remaining_ms);
- */
 static void pri_level_request(uint16_t model_id, uint16_t element_index,
 		uint16_t client_addr, uint16_t server_addr, uint16_t appkey_index,
 		const struct mesh_generic_request *request, uint32_t transition_ms,
@@ -202,23 +168,7 @@ static void pri_level_request(uint16_t model_id, uint16_t element_index,
 static void pri_level_change(uint16_t model_id, uint16_t element_index,
 		const struct mesh_generic_state *current,
 		const struct mesh_generic_state *target, uint32_t remaining_ms);
-/*
- static void sec_level_request(uint16_t model_id,
- uint16_t element_index,
- uint16_t client_addr,
- uint16_t server_addr,
- uint16_t appkey_index,
- const struct mesh_generic_request *request,
- uint32_t transition_ms,
- uint16_t delay_ms,
- uint8_t request_flags);
 
- static void sec_level_change(uint16_t model_id,
- uint16_t element_index,
- const struct mesh_generic_state *current,
- const struct mesh_generic_state *target,
- uint32_t remaining_ms);
- */
 static void handle_gecko_event(uint32_t evt_id, struct gecko_cmd_packet *evt);
 bool mesh_bgapi_listener(struct gecko_cmd_packet *evt);
 
@@ -252,7 +202,7 @@ int main() {
 	gecko_bgapi_class_mesh_proxy_init();
 	gecko_bgapi_class_mesh_proxy_server_init();
 	//gecko_bgapi_class_mesh_proxy_client_init();
-	//gecko_bgapi_class_mesh_generic_client_init();
+	gecko_bgapi_class_mesh_generic_client_init();
 	gecko_bgapi_class_mesh_generic_server_init();
 	//gecko_bgapi_class_mesh_vendor_model_init();
 	//gecko_bgapi_class_mesh_health_client_init();
@@ -342,15 +292,11 @@ void receive_node_init() {
 	}
 	//TODO
 	gecko_cmd_hardware_set_soft_timer(TIMER_CHECK_HEART_BEAT,
-			TIMER_ID_CHECK_HEART_BEAT, TIMER_REPEAT);
-
-	//How to identify 2 sensor which are same functions and models ???????????
+	TIMER_ID_CHECK_HEART_BEAT, TIMER_REPEAT);
 
 	mesh_lib_generic_server_register_handler(MESH_GENERIC_LEVEL_SERVER_MODEL_ID,
 			primary_element, pri_level_request, pri_level_change);
 
-	/*mesh_lib_generic_server_register_handler(MESH_GENERIC_LEVEL_SERVER_MODEL_ID,
-	 secondary_element, sec_level_request, sec_level_change);*/
 }
 
 static void pri_level_request(uint16_t model_id, uint16_t element_index,
@@ -384,45 +330,13 @@ static void pri_level_request(uint16_t model_id, uint16_t element_index,
 		printf("Mesh data sent !!! \r\n");
 	}
 
-	//Variables for the reading temperature and humidity process
-	/*char print_str[LCD_ROW_LEN];
-	 sprintf(print_str, "Temp: %d Celsius", temperature);
-	 LCD_write(print_str, LCD_ROW_SENSOR_00);
-	 printf("Temperature: %d Celsius !!!\r\n", temperature);*/
 }
 
 static void pri_level_change(uint16_t model_id, uint16_t element_index,
- const struct mesh_generic_state *current,
- const struct mesh_generic_state *target, uint32_t remaining_ms) {
- }
-/*
- static void sec_level_request(uint16_t model_id, uint16_t element_index,
- uint16_t client_addr, uint16_t server_addr, uint16_t appkey_index,
- const struct mesh_generic_request *request, uint32_t transition_ms,
- uint16_t delay_ms, uint8_t request_flags) {
- if (request->kind != mesh_generic_request_level) {
- return;
- }
+		const struct mesh_generic_state *current,
+		const struct mesh_generic_state *target, uint32_t remaining_ms) {
+}
 
- printf(
- "Received data from sensor in Secondary Element for Humidity !!! \r\n");
- printf("pri_level_request: level=%d, transition=%lu, delay=%u\r\n",
- request->level, transition_ms, delay_ms);
-
- humidity = request->level;
-
- //Variables for the reading temperature and humidity process
- char print_str[LCD_ROW_LEN];
- sprintf(print_str, "Humi: %d percent", humidity);
- LCD_write(print_str, LCD_ROW_SENSOR_01);
- printf("Humidity: %d percent !!!\r\n", humidity);
- }
-
- static void sec_level_change(uint16_t model_id, uint16_t element_index,
- const struct mesh_generic_state *current,
- const struct mesh_generic_state *target, uint32_t remaining_ms) {
- }
- */
 static void handle_gecko_event(uint32_t evt_id, struct gecko_cmd_packet *evt) {
 	uint16 result;
 	char buf[30];
@@ -559,15 +473,6 @@ static void handle_gecko_event(uint32_t evt_id, struct gecko_cmd_packet *evt) {
 	case gecko_evt_mesh_generic_server_client_request_id:
 		printf("Receive command from Sensor Client !!! \r\n");
 
-		/*
-		 //User command: Debug about secondary element from client request !!!.
-		 uint16 model_id_receive = &(evt->data.evt_mesh_generic_server_client_request)->model_id;
-		 uint16 element_index_receive = &(evt->data.evt_mesh_generic_server_client_request)->elem_index;
-
-		 printf("Model ID receive from client request: %d", model_id_receive);
-		 printf("Element Index receive from client request: %d", element_index_receive);
-		 */
-		//TODO
 		for (; index < num_lpn; index++) {
 			printf("LPN stats: %d\t%d\t%d\r\n", status_arr[index].status,
 					status_arr[index].address, status_arr[index].mess_count);
