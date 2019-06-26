@@ -30,5 +30,29 @@ mesh_data_t get_mesh_data(uint16 data) {
 	mesh_data.battery_percent = (data >> 9) & 0x7f;
 	return mesh_data;
 };
+typedef struct {
+	uint8 status;
+	uint16 address;
+	uint8 mess_count;
+	uint8 flag;
+} lpn_status;
 
+uint16 get_lpn_status_index(uint16 address, lpn_status* array, uint16 num_lpn){
+	uint8 i = 0;
+	for(;i< num_lpn; i++ ){
+		if(array[i].address == address){
+			return i;
+		}
+	}
+	printf("Can't find the address");
+}
+uint8 is_friend_address(uint16 address, lpn_status* array, uint16 num_lpn){
+	uint8 i = 0;
+	for(;i< num_lpn; i++){
+		if(array[i].address == address){
+			return 1;
+		}
+		else return 0;
+	}
+}
 #endif

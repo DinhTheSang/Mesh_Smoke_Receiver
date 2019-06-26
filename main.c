@@ -59,13 +59,23 @@
 #include "lcd_driver.h"
 #include "mesh_data.h"
 /***********************************************************************************************//**
- * @addtogroup Application
- * @{
+ * Define for Led
+ *
  **************************************************************************************************/
-
+#ifdef FEATURE_LED_BUTTON_ON_SAME_PIN
+/* LED GPIO is active-low */
+#define TURN_LED_OFF   GPIO_PinOutSet
+#define TURN_LED_ON    GPIO_PinOutClear
+#define LED_DEFAULT_STATE  1
+#else
+/* LED GPIO is active-high */
+#define TURN_LED_OFF   GPIO_PinOutClear
+#define TURN_LED_ON    GPIO_PinOutSet
+#define LED_DEFAULT_STATE  0
+#endif
 /***********************************************************************************************//**
- * @addtogroup app
- * @{
+ *
+ **
  **************************************************************************************************/
 
 // bluetooth stack heap
@@ -121,38 +131,57 @@ MAX_CONNECTIONS, .bluetooth.max_advertisers = MAX_ADVERTISERS, .bluetooth.heap =
 //Define clock frequency
 #define TIMER_CLOCK_FREQ             (uint32) 32768
 #define TIMER_MILLIS_SECONDS(ms)     ((TIMER_CLOCK_FREQ * ms)/1000)
-#define TIMER_CHECK_HEART_BEAT 		(uint32) (600*32768)
+#define TIMER_CHECK_LPN_HEART_BEAT 		(uint32) (15*32768)
+#define TIMER_CHECK_GATEWAY_HEART_BEAT		(uint32) (15*32768)
 //Timer handlers defines
 #define TIMER_ID_RESTART        78
 #define TIMER_ID_FACTORY_RESET  77
 #define TIMER_ID_BLINK_LED      10
 #define TIMER_REPEAT		0
 //TODO
-#define TIMER_ID_CHECK_HEART_BEAT	79
-
+#define TIMER_ID_CHECK_LPN_HEART_BEAT	79
+#define TIMER_ID_CHECK_GATEWAY_HEAT_BEAT 80
+#define TIMER_ID_SEND_TEST_MESSAGE  81
+/* Define Response flag when send Mesh data */
+#define FLAG_NON_RESPONSE          0x00
+#define FLAG_RESPONSE              0x01
+/*Define led state*/
+#define LED_STATE_OFF    		0
+#define LED_STATE_ON 			1
+/* Define Retransmit flag */
+#define FLAG_RETRANS               0x01
+#define FLAG_NON_RETRANS           0x00
 //Global Variable
 ///Number of active Bluetooth connections
 static uint8 num_connections = 0;
 ///Handle of the last opened LE connection
 static uint8 connection_handle = 0xFF;
 
-//define Status Array
-static uint16 transaction_id = 0;
+static uint8 gateway_health;
+
 static uint16 primary_element = 0;
-static uint16 secondary_element = 1;
-static uint16 third_element = 2;
-static uint16 response_flag = 0;
-static uint16 gateway_address;
-static struct status_arr {
-	uint8 status;
-	uint16 address;
-	uint8 mess_count;
-	uint8 flag;
-};
-struct status_arr status_arr[MESH_CFG_MAX_FRIENDSHIPS];
+static uint16 transaction_id = 0;
+static uint16 gateway_address = 0;
+lpn_status* lpn_status_arr;
+//define Status Array
+/*static uint16 transaction_id = 0;
+ static uint16 primary_element = 0;
+ static uint16 secondary_element = 1;
+ static uint16 third_element = 2;
+ static uint16 response_flag = 0;
+ static uint16 gateway_address = 1;
+ typedef struct arr {
+ uint8 status;
+ uint16 address;
+ uint8 mess_count;
+ uint8 flag;
+ } ;
+ struct arr status_arr[MESH_CFG_MAX_FRIENDSHIPS];
+ */
+//lpn_status lpn_status_arr;
 static uint8 index = 0;
 static uint8 num_lpn = 0;
-
+mesh_data_t node_data;
 //User function
 static void button_init();
 static void led_init();
@@ -250,6 +279,20 @@ static void led_init() {
 	GPIO_PinModeSet(BSP_LED1_PORT, BSP_LED1_PIN, gpioModePushPull, 0);
 }
 
+static void LED_set_state(int state) {
+	switch (state) {
+	case LED_STATE_OFF:
+		TURN_LED_OFF(BSP_LED0_PORT, BSP_LED0_PIN);
+		TURN_LED_OFF(BSP_LED1_PORT, BSP_LED1_PIN);
+		break;
+	case LED_STATE_ON:
+		TURN_LED_ON(BSP_LED0_PORT, BSP_LED0_PIN);
+		TURN_LED_ON(BSP_LED1_PORT, BSP_LED1_PIN);
+		break;
+	default:
+		break;
+	}
+}
 void set_device_name(bd_addr *pAddr) {
 	char name[20];
 	sprintf(name, "Address: %02x:%02x", pAddr->addr[1], pAddr->addr[0]);
@@ -281,8 +324,7 @@ void receive_node_init() {
 
 	//Re-init primary and secondary element
 	primary_element = 0;
-	secondary_element = 1;
-	third_element = 2;
+
 	//Initialize friend function
 	printf("Initialize friend function !!! \r\n");
 
@@ -290,12 +332,26 @@ void receive_node_init() {
 	if (result) {
 		printf("Friend init failed !!! \r\n");
 	}
-	//TODO
-	gecko_cmd_hardware_set_soft_timer(TIMER_CHECK_HEART_BEAT,
-	TIMER_ID_CHECK_HEART_BEAT, TIMER_REPEAT);
+	// define gateway health status and timer that check gateway's heartbeat
+	gateway_health = 5;
+	gecko_cmd_hardware_set_soft_timer(TIMER_CHECK_GATEWAY_HEART_BEAT,
+	TIMER_ID_CHECK_GATEWAY_HEAT_BEAT, TIMER_REPEAT);
 
-	mesh_lib_generic_server_register_handler(MESH_GENERIC_LEVEL_SERVER_MODEL_ID,
-			primary_element, pri_level_request, pri_level_change);
+	lpn_status_arr = (lpn_status*) malloc(
+			sizeof(lpn_status) * MESH_CFG_MAX_FRIENDSHIPS);
+	if (lpn_status_arr == NULL) {
+		printf("Out of memory !!! \r\n");
+		return;
+	}
+	gecko_cmd_hardware_set_soft_timer(TIMER_CHECK_LPN_HEART_BEAT,
+	TIMER_ID_CHECK_LPN_HEART_BEAT, TIMER_REPEAT);
+
+	mesh_lib_generic_server_register_handler(
+	MESH_GENERIC_LEVEL_SERVER_MODEL_ID, primary_element, pri_level_request,
+			pri_level_change);
+	//TODO
+	gecko_cmd_hardware_set_soft_timer(2 * 32768,
+	TIMER_ID_SEND_TEST_MESSAGE, TIMER_REPEAT);
 
 }
 
@@ -311,30 +367,76 @@ static void pri_level_request(uint16_t model_id, uint16_t element_index,
 	req->level = request->level;
 	uint16_t new_element_index;
 	for (; index < num_lpn; index++) {
-		if (status_arr[index].address = client_addr) {
+		if (lpn_status_arr[index].address == client_addr) {
 			new_element_index = index + 1;
-			req->level &= (status_arr[index].status & 0x01) << 8;
+			req->level &= (lpn_status_arr[index].status & 0x01) << 8;
 			break;
 		}
 	}
 	index = 0;
-	uint16 resp;
+	node_data = get_mesh_data(req->level);
+	send_mesh_data(FLAG_NON_RESPONSE, FLAG_NON_RETRANS, new_element_index);
+	/*uint16 resp;
 
-	resp = mesh_lib_generic_client_set(MESH_GENERIC_LEVEL_CLIENT_MODEL_ID,
-			element_index, gateway_address, APP_KEY_INDEX, transaction_id, &req,
-			transition_ms, delay_ms, response_flag);
+	 resp = mesh_lib_generic_client_set(MESH_GENERIC_LEVEL_CLIENT_MODEL_ID,
+	 new_element_index, gateway_address, APP_KEY_INDEX, transaction_id, &req,
+	 transition_ms, delay_ms, response_flag);
 
-	if (resp) {
-		printf("Send Mesh data failed !!! \r\n");
-	} else {
-		printf("Mesh data sent !!! \r\n");
-	}
+	 if (resp) {
+	 printf("Send Mesh data failed !!! \r\n");
+	 } else {
+	 printf("Mesh data sent !!! \r\n");
+	 }*/
 
 }
 
 static void pri_level_change(uint16_t model_id, uint16_t element_index,
 		const struct mesh_generic_state *current,
 		const struct mesh_generic_state *target, uint32_t remaining_ms) {
+}
+void send_mesh_data(uint8 response_flag, uint8 retransmit, int element_index) {
+	uint16 resp;
+	uint32_t transition_ms = 0;
+	uint16_t delay_ms = 0;
+	struct mesh_generic_request req;
+
+	printf("Send Mesh Data Function \r\n");
+	printf("***********************\r\n");
+	printf("***********************\r\n");
+
+	req.kind = mesh_generic_request_level;
+	req.level = set_mesh_data(node_data);
+
+	/* Increase transaction_id after each packet sent with non - retransmition */
+	if (retransmit == FLAG_NON_RETRANS) {
+		transaction_id++;
+	}
+
+	/* If LPN - Friend friendship establish, mesh data wil send to friend node */
+	/* Else, mesh data will send to 0x0000 address */
+
+	resp = mesh_lib_generic_client_set(
+	MESH_GENERIC_LEVEL_CLIENT_MODEL_ID, element_index, gateway_address,
+	APP_KEY_INDEX, transaction_id, &req, transition_ms, delay_ms,
+			response_flag);
+
+	if (resp) {
+		printf("Send Mesh data failed !!! \r\n");
+	} else {
+		printf("Mesh data sent !!! \r\n");
+	}
+}
+void refine_lpn_status_arr(uint16 terminate_this_address) {
+	uint8 result_index = get_lpn_status_index(terminate_this_address,
+			lpn_status_arr, num_lpn);
+	{
+		lpn_status_arr[result_index].address = lpn_status_arr[num_lpn].address;
+		lpn_status_arr[result_index].status = lpn_status_arr[num_lpn].status;
+		lpn_status_arr[result_index].mess_count =
+				lpn_status_arr[num_lpn].mess_count;
+		lpn_status_arr[result_index].flag = lpn_status_arr[num_lpn].flag;
+	}
+	num_lpn--;
 }
 
 static void handle_gecko_event(uint32_t evt_id, struct gecko_cmd_packet *evt) {
@@ -383,107 +485,120 @@ static void handle_gecko_event(uint32_t evt_id, struct gecko_cmd_packet *evt) {
 			GPIO_PinOutToggle(BSP_LED1_PORT, BSP_LED1_PIN);
 			break;
 			//TODO
-		case TIMER_ID_CHECK_HEART_BEAT:
+		case TIMER_ID_CHECK_LPN_HEART_BEAT:
 			for (; index < num_lpn; index++) {
-				if (status_arr[index].flag == 0) {
-					status_arr[index].flag = 1;
-					status_arr[index].mess_count = 0;
-				} else if (status_arr[index].mess_count < 4
-						&& status_arr[index].flag == 1) {
-					status_arr[index].status = 0;
-					status_arr[index].mess_count = 0;
-					//printf("%d gone BAD", index);
+				if (lpn_status_arr[index].flag == 0) {
+					lpn_status_arr[index].flag = 1;
+					lpn_status_arr[index].mess_count = 0;
+				} else if (lpn_status_arr[index].mess_count < 4
+						&& lpn_status_arr[index].flag == 1) {
+					lpn_status_arr[index].status = 0;
+					lpn_status_arr[index].mess_count = 0;
+					printf("%d gone BAD", index);
 				} else {
-					status_arr[index].status = 1;
-					status_arr[index].mess_count = 0;
+					lpn_status_arr[index].status = 1;
+					lpn_status_arr[index].mess_count = 0;
 				}
 			}
 			index = 0;
 			break;
+		case TIMER_ID_CHECK_GATEWAY_HEAT_BEAT:
+			gateway_health--;
+			if (gateway_health < 1) {
+				printf("Main gateway is dead, use secondary gateway\r\n");
+				gateway_address = 2;
+			}
+			break;
+			/*case TIMER_ID_SEND_TEST_MESSAGE:
+			 send_mesh_data(FLAG_RESPONSE, FLAG_NON_RETRANS, 0);
+			 break;*/
 
 		default:
 			break;
-		}
-		break;
 
-	case gecko_evt_mesh_node_initialized_id:
-		printf("Node initialized !!! \r\n");
+		case gecko_evt_mesh_node_initialized_id:
+			printf("Node initialized !!! \r\n");
 
-		result = gecko_cmd_mesh_generic_server_init()->result;
-		if (result) {
-			printf("Generic Sever Init failed !!! \r\n");
-		}
-		result = gecko_cmd_mesh_generic_client_init()->result;
-		if (result) {
-			printf("Generic Client Init failed !!! \r\n");
-		}
-		if (!evt->data.evt_mesh_node_initialized.provisioned) {
-			LCD_write("Unprovisioned !!!", LCD_ROW_INFO);
+			result = gecko_cmd_mesh_generic_server_init()->result;
+			if (result) {
+				printf("Generic Sever Init failed !!! \r\n");
+			}
+			result = gecko_cmd_mesh_generic_client_init()->result;
+			if (result) {
+				printf("Generic Client Init failed !!! \r\n");
+			}
+			if (!evt->data.evt_mesh_node_initialized.provisioned) {
+				LCD_write("Unprovisioned !!!", LCD_ROW_INFO);
 
-			printf("Device Unprovisioned !!!!!!\r\n");
+				printf("Device Unprovisioned !!!!!!\r\n");
 
-			// The Node is now initialized, start unprovisioned Beaconing using PB-ADV and PB-GATT Bearers
-			gecko_cmd_mesh_node_start_unprov_beaconing(0x3);
-		} else {
+				// The Node is now initialized, start unprovisioned Beaconing using PB-ADV and PB-GATT Bearers
+				gecko_cmd_mesh_node_start_unprov_beaconing(0x3);
+			} else {
+				LCD_write("Provisioned !!!", LCD_ROW_INFO);
+
+				printf("Device Provisioned !!!!!!\r\n");
+
+				receive_node_init();
+			}
+			break;
+
+		case gecko_evt_mesh_node_provisioning_started_id:
+			LCD_write("Provisioning...", LCD_ROW_INFO);
+
+			printf("Provisioning Process !!!!!!\r\n");
+
+			gecko_cmd_hardware_set_soft_timer(TIMER_MILLIS_SECONDS(1000),
+			TIMER_ID_BLINK_LED, 0);
+			break;
+
+		case gecko_evt_mesh_node_provisioned_id:
 			LCD_write("Provisioned !!!", LCD_ROW_INFO);
 
 			printf("Device Provisioned !!!!!!\r\n");
 
 			receive_node_init();
-		}
-		break;
 
-	case gecko_evt_mesh_node_provisioning_started_id:
-		LCD_write("Provisioning...", LCD_ROW_INFO);
-
-		printf("Provisioning Process !!!!!!\r\n");
-
-		gecko_cmd_hardware_set_soft_timer(TIMER_MILLIS_SECONDS(1000),
-		TIMER_ID_BLINK_LED, 0);
-		break;
-
-	case gecko_evt_mesh_node_provisioned_id:
-		LCD_write("Provisioned !!!", LCD_ROW_INFO);
-
-		printf("Device Provisioned !!!!!!\r\n");
-
-		receive_node_init();
-
-		gecko_cmd_hardware_set_soft_timer(0, TIMER_ID_BLINK_LED, 1);
-		GPIO_PinOutClear(BSP_LED0_PORT, BSP_LED0_PIN);
-		GPIO_PinOutClear(BSP_LED1_PORT, BSP_LED1_PIN);
-		break;
-
-	case gecko_evt_mesh_node_provisioning_failed_id:
-		LCD_write("Prov Failed !!!", LCD_ROW_INFO);
-
-		printf("Provisioning Process Failed !!!!!!\r\n");
-
-		gecko_cmd_hardware_set_soft_timer(2 * 32768, TIMER_ID_RESTART, 1);
-		break;
-
-	case gecko_evt_mesh_node_key_added_id:
-		printf("New key !!!! \r\n");
-		break;
-
-	case gecko_evt_mesh_node_model_config_changed_id:
-		printf("Mesh node model config changed !!! \r\n");
-		break;
-
-	case gecko_evt_mesh_generic_server_client_request_id:
-		printf("Receive command from Sensor Client !!! \r\n");
-
-		for (; index < num_lpn; index++) {
-			printf("LPN stats: %d\t%d\t%d\r\n", status_arr[index].status,
-					status_arr[index].address, status_arr[index].mess_count);
-			if (status_arr[index].address
-					== (&(evt->data.evt_mesh_generic_server_client_request))->client_address)
-				status_arr[index].mess_count++;
+			gecko_cmd_hardware_set_soft_timer(0, TIMER_ID_BLINK_LED, 1);
+			GPIO_PinOutClear(BSP_LED0_PORT, BSP_LED0_PIN);
+			GPIO_PinOutClear(BSP_LED1_PORT, BSP_LED1_PIN);
 			break;
-		}
-		index = 0;
 
-		mesh_lib_generic_server_event_handler(evt);
+		case gecko_evt_mesh_node_provisioning_failed_id:
+			LCD_write("Prov Failed !!!", LCD_ROW_INFO);
+
+			printf("Provisioning Process Failed !!!!!!\r\n");
+
+			gecko_cmd_hardware_set_soft_timer(2 * 32768, TIMER_ID_RESTART, 1);
+			break;
+
+		case gecko_evt_mesh_node_key_added_id:
+			printf("New key !!!! \r\n");
+			break;
+
+		case gecko_evt_mesh_node_model_config_changed_id:
+			printf("Mesh node model config changed !!! \r\n");
+			break;
+
+		case gecko_evt_mesh_generic_server_client_request_id:
+			printf("Receive command from Sensor Client !!! \r\n");
+			result = is_friend_address((&(evt->data.evt_mesh_generic_server_client_request))->client_address, lpn_status_arr, num_lpn);
+			if (result) {
+			 lpn_status_arr[index].mess_count++;
+			 } else if ((&(evt->data.evt_mesh_generic_server_client_request))->client_address == gateway_address) {
+			 gateway_health = 5;
+			 } else
+			 printf("strange address\r\n");
+			 //gateway ...
+			 break;
+			index = 0;
+			//printf("%d\t%d\t%d\r\n",status_arr[index].status, status_arr[index].address, status_arr[index].mess_count);
+			mesh_lib_generic_server_event_handler(evt);
+		}
+		break;
+
+	case gecko_evt_mesh_generic_client_server_status_id:
+		printf("Received response");
 		break;
 
 	case gecko_evt_mesh_generic_server_state_changed_id:
@@ -497,36 +612,28 @@ static void handle_gecko_event(uint32_t evt_id, struct gecko_cmd_packet *evt) {
 		break;
 
 	case gecko_evt_mesh_friend_friendship_established_id:
-		printf("Event gecko_evt_mesh_friend_friendship_established !!! \r\n");
 		LCD_write("FRIEND", LCD_ROW_FRIEND_INFOR);
-		//TODO
+		printf("Event gecko_evt_mesh_friend_friendship_established !!! \r\n");
 		if (num_lpn < MESH_CFG_MAX_FRIENDSHIPS) {
-			status_arr[num_lpn].mess_count = 0;
-			status_arr[num_lpn].address =
-					(&(evt->data.evt_mesh_friend_friendship_established))->lpn_address;
-			status_arr[num_lpn].status = 1;
-			status_arr[num_lpn].flag = 0;
+			lpn_status_arr[num_lpn].mess_count = 0;
+			lpn_status_arr[num_lpn].address =
+					((&(evt->data.evt_mesh_friend_friendship_established))->lpn_address);
+			lpn_status_arr[num_lpn].status = 1;
+			lpn_status_arr[num_lpn].flag = 0;
+		} else {
+			printf("Max number of friendship was established");
 		}
-		printf("LPN stats: %d\t%d\t%d\r\n", status_arr[num_lpn].status,
-				status_arr[num_lpn].address, status_arr[num_lpn].mess_count);
-		num_lpn++;
+		printf("LPN stats: %d\t%d\t%d\r\n", lpn_status_arr[num_lpn].status,
+				lpn_status_arr[num_lpn].address,
+				lpn_status_arr[num_lpn].mess_count);
 		break;
 
 	case gecko_evt_mesh_friend_friendship_terminated_id:
 		printf("Event gecko_evt_mesh_friend_friendship_terminated !!!\r\n");
 		LCD_write("NO LPN", LCD_ROW_FRIEND_INFOR);
-		//TODO
-		//      update lai. friend list ??
-		gecko_cmd_mesh_friend_deinit();
-		for (; index < num_lpn; index++) {
-			status_arr[index].address = 0;
-			status_arr[index].status = 0;
-			status_arr[index].mess_count = 0;
-			status_arr[index].flag = 0;
-		}
-		num_lpn = 0;
-		gecko_cmd_mesh_friend_init();
-
+		uint16 friendship_terminated_address =
+				(&(evt->data.evt_mesh_friend_friendship_terminated))->reason;
+		refine_lpn_status_arr(friendship_terminated_address);
 		break;
 
 	case gecko_evt_le_connection_opened_id:
