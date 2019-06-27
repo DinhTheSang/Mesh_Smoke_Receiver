@@ -501,6 +501,8 @@ static void handle_gecko_event(uint32_t evt_id, struct gecko_cmd_packet *evt) {
 				}
 			}
 			index = 0;
+			//send message to gateway
+			send_mesh_data(FLAG_NON_RESPONSE, FLAG_NON_RETRANS, primary_element);
 			break;
 		case TIMER_ID_CHECK_GATEWAY_HEAT_BEAT:
 			gateway_health--;
@@ -581,8 +583,9 @@ static void handle_gecko_event(uint32_t evt_id, struct gecko_cmd_packet *evt) {
 			break;
 
 		case gecko_evt_mesh_generic_server_client_request_id:
-			printf("Receive command from Sensor Client !!! \r\n");
-			result = is_friend_address((&(evt->data.evt_mesh_generic_server_client_request))->client_address, lpn_status_arr, num_lpn);
+			printf("Receive message!!! \r\n");
+			uint16 client_address = (&(evt->data.evt_mesh_generic_server_client_request))->client_address;
+			result = is_friend_address(client_address, lpn_status_arr, num_lpn);
 			if (result) {
 			 lpn_status_arr[index].mess_count++;
 			 } else if ((&(evt->data.evt_mesh_generic_server_client_request))->client_address == gateway_address) {
@@ -614,10 +617,10 @@ static void handle_gecko_event(uint32_t evt_id, struct gecko_cmd_packet *evt) {
 	case gecko_evt_mesh_friend_friendship_established_id:
 		LCD_write("FRIEND", LCD_ROW_FRIEND_INFOR);
 		printf("Event gecko_evt_mesh_friend_friendship_established !!! \r\n");
+		uint16 new_friendship_address = (&(evt->data.evt_mesh_friend_friendship_established))->lpn_address;
 		if (num_lpn < MESH_CFG_MAX_FRIENDSHIPS) {
 			lpn_status_arr[num_lpn].mess_count = 0;
-			lpn_status_arr[num_lpn].address =
-					((&(evt->data.evt_mesh_friend_friendship_established))->lpn_address);
+			lpn_status_arr[num_lpn].address = new_friendship_address;
 			lpn_status_arr[num_lpn].status = 1;
 			lpn_status_arr[num_lpn].flag = 0;
 		} else {
@@ -629,10 +632,11 @@ static void handle_gecko_event(uint32_t evt_id, struct gecko_cmd_packet *evt) {
 		break;
 
 	case gecko_evt_mesh_friend_friendship_terminated_id:
-		printf("Event gecko_evt_mesh_friend_friendship_terminated !!!\r\n");
+		printf("Event gecko_evt_mesh_friend_friendship_terminated !!!\r\n" );
 		LCD_write("NO LPN", LCD_ROW_FRIEND_INFOR);
 		uint16 friendship_terminated_address =
 				(&(evt->data.evt_mesh_friend_friendship_terminated))->reason;
+		printf("reason: %d", friendship_terminated_address);
 		refine_lpn_status_arr(friendship_terminated_address);
 		break;
 

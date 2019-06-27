@@ -55,4 +55,5 @@ uint8 is_friend_address(uint16 address, lpn_status* array, uint16 num_lpn){
 		else return 0;
 	}
 }
+
 #endif
