@@ -139,8 +139,9 @@ MAX_CONNECTIONS, .bluetooth.max_advertisers = MAX_ADVERTISERS, .bluetooth.heap =
 #define TIMER_ID_BLINK_LED      10
 #define TIMER_REPEAT		0
 //TODO
-#define TIMER_ID_CHECK_LPN_HEART_BEAT	79
-#define TIMER_ID_CHECK_GATEWAY_HEAT_BEAT 80
+/*#define TIMER_ID_CHECK_LPN_HEART_BEAT	79
+ #define TIMER_ID_CHECK_GATEWAY_HEAT_BEAT 80*/
+#define TIMER_ID_TIMEOUT		79
 #define TIMER_ID_SEND_TEST_MESSAGE  81
 /* Define Response flag when send Mesh data */
 #define FLAG_NON_RESPONSE          0x00
@@ -333,26 +334,32 @@ void receive_node_init() {
 		printf("Friend init failed !!! \r\n");
 	}
 	// define gateway health status and timer that check gateway's heartbeat
-	gateway_health = 5;
-	gecko_cmd_hardware_set_soft_timer(TIMER_CHECK_GATEWAY_HEART_BEAT,
-	TIMER_ID_CHECK_GATEWAY_HEAT_BEAT, TIMER_REPEAT);
+	/*gateway_health = 5;
+	 gecko_cmd_hardware_set_soft_timer(TIMER_CHECK_GATEWAY_HEART_BEAT,
+	 TIMER_ID_CHECK_GATEWAY_HEAT_BEAT, TIMER_REPEAT);*/
 
 	lpn_status_arr = (lpn_status*) malloc(
-			sizeof(lpn_status) * MESH_CFG_MAX_FRIENDSHIPS);
+			sizeof(lpn_status) * (MESH_CFG_MAX_FRIENDSHIPS + 1));
+	//init first index for gateway
+	{
+		lpn_status_arr[0].address = 1;
+		lpn_status_arr[0].status = 1;
+		lpn_status_arr[0].timeOut = 0;
+	}
 	if (lpn_status_arr == NULL) {
 		printf("Out of memory !!! \r\n");
 		return;
 	}
 	gecko_cmd_hardware_set_soft_timer(TIMER_CHECK_LPN_HEART_BEAT,
-	TIMER_ID_CHECK_LPN_HEART_BEAT, TIMER_REPEAT);
+	TIMER_ID_TIMEOUT, TIMER_REPEAT);
 
 	mesh_lib_generic_server_register_handler(
 	MESH_GENERIC_LEVEL_SERVER_MODEL_ID, primary_element, pri_level_request,
 			pri_level_change);
 	//TODO
-	gecko_cmd_hardware_set_soft_timer(2 * 32768,
-	TIMER_ID_SEND_TEST_MESSAGE, TIMER_REPEAT);
-
+	/*gecko_cmd_hardware_set_soft_timer(2 * 32768,
+	 TIMER_ID_SEND_TEST_MESSAGE, TIMER_REPEAT);
+	 */
 }
 
 static void pri_level_request(uint16_t model_id, uint16_t element_index,
@@ -426,17 +433,18 @@ void send_mesh_data(uint8 response_flag, uint8 retransmit, int element_index) {
 		printf("Mesh data sent !!! \r\n");
 	}
 }
-void refine_lpn_status_arr(uint16 terminate_this_address) {
-	uint8 result_index = get_lpn_status_index(terminate_this_address,
-			lpn_status_arr, num_lpn);
-	{
-		lpn_status_arr[result_index].address = lpn_status_arr[num_lpn].address;
-		lpn_status_arr[result_index].status = lpn_status_arr[num_lpn].status;
-		lpn_status_arr[result_index].mess_count =
-				lpn_status_arr[num_lpn].mess_count;
-		lpn_status_arr[result_index].flag = lpn_status_arr[num_lpn].flag;
+void update_and_check_timeOut(lpn_status* array, uint16 num_lpn) {
+	uint8 i = 0;
+	for (; i < num_lpn; i++) {
+		array[i].timeOut++;
+		if (array[i].timeOut > 2) {
+			array[i].status = 0;
+			if (i == 0)
+				gateway_address = 2;
+			else
+				send_mesh_data(FLAG_NON_RESPONSE, FLAG_NON_RETRANS, i);
+		}
 	}
-	num_lpn--;
 }
 
 static void handle_gecko_event(uint32_t evt_id, struct gecko_cmd_packet *evt) {
@@ -485,39 +493,39 @@ static void handle_gecko_event(uint32_t evt_id, struct gecko_cmd_packet *evt) {
 			GPIO_PinOutToggle(BSP_LED1_PORT, BSP_LED1_PIN);
 			break;
 			//TODO
-		case TIMER_ID_CHECK_LPN_HEART_BEAT:
-			for (; index < num_lpn; index++) {
-				if (lpn_status_arr[index].flag == 0) {
-					lpn_status_arr[index].flag = 1;
-					lpn_status_arr[index].mess_count = 0;
-				} else if (lpn_status_arr[index].mess_count < 4
-						&& lpn_status_arr[index].flag == 1) {
-					lpn_status_arr[index].status = 0;
-					lpn_status_arr[index].mess_count = 0;
-					printf("%d gone BAD", index);
-				} else {
-					lpn_status_arr[index].status = 1;
-					lpn_status_arr[index].mess_count = 0;
-				}
-			}
-			index = 0;
-			//send message to gateway
-			send_mesh_data(FLAG_NON_RESPONSE, FLAG_NON_RETRANS, primary_element);
-			break;
-		case TIMER_ID_CHECK_GATEWAY_HEAT_BEAT:
-			gateway_health--;
-			if (gateway_health < 1) {
-				printf("Main gateway is dead, use secondary gateway\r\n");
-				gateway_address = 2;
-			}
-			break;
-			/*case TIMER_ID_SEND_TEST_MESSAGE:
+		case TIMER_ID_TIMEOUT:
+			update_and_check_timeOut(lpn_status_arr, num_lpn);
+
+			/*for (; index < num_lpn; index++) {
+			 if (lpn_status_arr[index].flag == 0) {
+			 lpn_status_arr[index].flag = 1;
+			 lpn_status_arr[index].mess_count = 0;
+			 } else if (lpn_status_arr[index].mess_count < 4
+			 && lpn_status_arr[index].flag == 1) {
+			 lpn_status_arr[index].status = 0;
+			 lpn_status_arr[index].mess_count = 0;
+			 printf("%d gone BAD", index);
+			 } else {
+			 lpn_status_arr[index].status = 1;
+			 lpn_status_arr[index].mess_count = 0;
+			 }
+			 }
+			 index = 0;
+			 //send message to gateway
+			 send_mesh_data(FLAG_NON_RESPONSE, FLAG_NON_RETRANS, primary_element);
+			 break;
+			 case TIMER_ID_CHECK_GATEWAY_HEAT_BEAT:
+			 gateway_health--;
+			 if (gateway_health < 1) {
+			 printf("Main gateway is dead, use secondary gateway\r\n");
+			 gateway_address = 2;
+			 }
+			 break;
 			 send_mesh_data(FLAG_RESPONSE, FLAG_NON_RETRANS, 0);
 			 break;*/
-
-		default:
 			break;
-
+		}
+		break;
 		case gecko_evt_mesh_node_initialized_id:
 			printf("Node initialized !!! \r\n");
 
@@ -544,7 +552,6 @@ static void handle_gecko_event(uint32_t evt_id, struct gecko_cmd_packet *evt) {
 				receive_node_init();
 			}
 			break;
-
 		case gecko_evt_mesh_node_provisioning_started_id:
 			LCD_write("Provisioning...", LCD_ROW_INFO);
 
@@ -584,107 +591,106 @@ static void handle_gecko_event(uint32_t evt_id, struct gecko_cmd_packet *evt) {
 
 		case gecko_evt_mesh_generic_server_client_request_id:
 			printf("Receive message!!! \r\n");
-			uint16 client_address = (&(evt->data.evt_mesh_generic_server_client_request))->client_address;
-			result = is_friend_address(client_address, lpn_status_arr, num_lpn);
+			uint16 client_address =
+					(&(evt->data.evt_mesh_generic_server_client_request))->client_address;
+			result = is_friend_or_gateway_address(client_address,
+					lpn_status_arr, num_lpn);
 			if (result) {
-			 lpn_status_arr[index].mess_count++;
-			 } else if ((&(evt->data.evt_mesh_generic_server_client_request))->client_address == gateway_address) {
-			 gateway_health = 5;
-			 } else
-			 printf("strange address\r\n");
-			 //gateway ...
-			 break;
-			index = 0;
-			//printf("%d\t%d\t%d\r\n",status_arr[index].status, status_arr[index].address, status_arr[index].mess_count);
-			mesh_lib_generic_server_event_handler(evt);
-		}
-		break;
-
-	case gecko_evt_mesh_generic_client_server_status_id:
-		printf("Received response");
-		break;
-
-	case gecko_evt_mesh_generic_server_state_changed_id:
-		printf("Server state changed !!! \r\n");
-		mesh_lib_generic_server_event_handler(evt);
-		break;
-
-	case gecko_evt_mesh_node_reset_id:
-		printf("Event gecko_evt_mesh_node_reset_id !!! \r\n");
-		factory_reset();
-		break;
-
-	case gecko_evt_mesh_friend_friendship_established_id:
-		LCD_write("FRIEND", LCD_ROW_FRIEND_INFOR);
-		printf("Event gecko_evt_mesh_friend_friendship_established !!! \r\n");
-		uint16 new_friendship_address = (&(evt->data.evt_mesh_friend_friendship_established))->lpn_address;
-		if (num_lpn < MESH_CFG_MAX_FRIENDSHIPS) {
-			lpn_status_arr[num_lpn].mess_count = 0;
-			lpn_status_arr[num_lpn].address = new_friendship_address;
-			lpn_status_arr[num_lpn].status = 1;
-			lpn_status_arr[num_lpn].flag = 0;
-		} else {
-			printf("Max number of friendship was established");
-		}
-		printf("LPN stats: %d\t%d\t%d\r\n", lpn_status_arr[num_lpn].status,
-				lpn_status_arr[num_lpn].address,
-				lpn_status_arr[num_lpn].mess_count);
-		break;
-
-	case gecko_evt_mesh_friend_friendship_terminated_id:
-		printf("Event gecko_evt_mesh_friend_friendship_terminated !!!\r\n" );
-		LCD_write("NO LPN", LCD_ROW_FRIEND_INFOR);
-		uint16 friendship_terminated_address =
-				(&(evt->data.evt_mesh_friend_friendship_terminated))->reason;
-		printf("reason: %d", friendship_terminated_address);
-		refine_lpn_status_arr(friendship_terminated_address);
-		break;
-
-	case gecko_evt_le_connection_opened_id:
-		printf("Open BLE connection !!! \r\n");
-		num_connections++;
-		connection_handle = evt->data.evt_le_connection_opened.connection;
-		LCD_write("Connected !!!", LCD_ROW_CONNECTION);
-		break;
-
-	case gecko_evt_le_connection_closed_id:
-		if (boot_to_dfu) {
-			gecko_cmd_system_reset(2);
-		}
-
-		printf("Close BLE connection !!! \r\n");
-		connection_handle = 0xFF;
-		if (num_connections > 0) {
-			if (--num_connections == 0) {
-				LCD_write("", LCD_ROW_CONNECTION);
+				refresh_timeOut_and_status(client_address, lpn_status_arr,
+						num_lpn);
 			}
-		}
-		break;
+			mesh_lib_generic_server_event_handler(evt);
+			break;
 
-	case gecko_evt_le_connection_parameters_id:
-		printf("BLE connection parameter: interval %d, timeout %d \r\n",
-				evt->data.evt_le_connection_parameters.interval,
-				evt->data.evt_le_connection_parameters.timeout);
-		break;
+		case gecko_evt_mesh_generic_client_server_status_id:
+			printf("Received response");
+			break;
 
-	case gecko_evt_le_gap_adv_timeout_id:
-		break;
+		case gecko_evt_mesh_generic_server_state_changed_id:
+			printf("Server state changed !!! \r\n");
+			mesh_lib_generic_server_event_handler(evt);
+			break;
 
-	case gecko_evt_gatt_server_user_write_request_id:
-		if (evt->data.evt_gatt_server_user_write_request.characteristic
-				== gattdb_ota_control) {
-			boot_to_dfu = 1;
+		case gecko_evt_mesh_node_reset_id:
+			printf("Event gecko_evt_mesh_node_reset_id !!! \r\n");
+			factory_reset();
+			break;
 
-			gecko_cmd_gatt_server_send_user_write_response(
-					evt->data.evt_gatt_server_user_write_request.connection,
-					gattdb_ota_control, bg_err_success);
+		case gecko_evt_mesh_friend_friendship_established_id:
+			LCD_write("FRIEND", LCD_ROW_FRIEND_INFOR);
+			printf(
+					"Event gecko_evt_mesh_friend_friendship_established !!! \r\n");
+			num_lpn++;
+			uint16 new_friendship_address =
+					(&(evt->data.evt_mesh_friend_friendship_established))->lpn_address;
+			if (num_lpn < MESH_CFG_MAX_FRIENDSHIPS) {
+				lpn_status_arr[num_lpn].address = new_friendship_address;
+				lpn_status_arr[num_lpn].status = 1;
+				lpn_status_arr[num_lpn].timeOut = 0;
+			} else {
+				printf("Max number of friendship was established");
+			}
+			printf("LPN stats: %d\t%d\t%d\r\n", lpn_status_arr[num_lpn].status,
+					lpn_status_arr[num_lpn].address,
+					lpn_status_arr[num_lpn].timeOut);
+			break;
 
-			gecko_cmd_le_connection_close(
-					evt->data.evt_gatt_server_user_write_request.connection);
-		}
-		break;
+		case gecko_evt_mesh_friend_friendship_terminated_id:
+			printf("Event gecko_evt_mesh_friend_friendship_terminated !!!\r\n");
+			LCD_write("NO LPN", LCD_ROW_FRIEND_INFOR);
+			uint16 friendship_terminated_address =
+					(&(evt->data.evt_mesh_friend_friendship_terminated))->reason;
+			printf("reason: %d", friendship_terminated_address);
+			refine_lpn_status_arr(friendship_terminated_address, lpn_status_arr,
+					num_lpn);
+			break;
 
-	default:
-		break;
+		case gecko_evt_le_connection_opened_id:
+			printf("Open BLE connection !!! \r\n");
+			num_connections++;
+			connection_handle = evt->data.evt_le_connection_opened.connection;
+			LCD_write("Connected !!!", LCD_ROW_CONNECTION);
+			break;
+
+		case gecko_evt_le_connection_closed_id:
+			if (boot_to_dfu) {
+				gecko_cmd_system_reset(2);
+			}
+
+			printf("Close BLE connection !!! \r\n");
+			connection_handle = 0xFF;
+			if (num_connections > 0) {
+				if (--num_connections == 0) {
+					LCD_write("", LCD_ROW_CONNECTION);
+				}
+			}
+			break;
+
+		case gecko_evt_le_connection_parameters_id:
+			printf("BLE connection parameter: interval %d, timeout %d \r\n",
+					evt->data.evt_le_connection_parameters.interval,
+					evt->data.evt_le_connection_parameters.timeout);
+			break;
+
+		case gecko_evt_le_gap_adv_timeout_id:
+			break;
+
+		case gecko_evt_gatt_server_user_write_request_id:
+			if (evt->data.evt_gatt_server_user_write_request.characteristic
+					== gattdb_ota_control) {
+				boot_to_dfu = 1;
+
+				gecko_cmd_gatt_server_send_user_write_response(
+						evt->data.evt_gatt_server_user_write_request.connection,
+						gattdb_ota_control, bg_err_success);
+
+				gecko_cmd_le_connection_close(
+						evt->data.evt_gatt_server_user_write_request.connection);
+			}
+			break;
+
+		default:
+			break;
+
 	}
 }
